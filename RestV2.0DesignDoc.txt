@@ -1,0 +1,521 @@
+John Francis
+CS201
+9/29/13
+
+RESTAURANT V2.0 DESIGN DOCUMENT
+
+
+WAITER AGENT
+
+Data:
+	string name;
+	CookAgent cook;
+	HostAgent host;
+	CashierAgent cashier;
+	List<MyCustomers> myCustomers;
+	class MyCustomer {
+		CustomerAgent customer;
+		string choice;
+		state s;
+		Table table;			//Might change to int
+	}
+	enum state = waiting, seated, readyToOrder, decidingOrder, ordered, waitingForFood, foodReady, served, done;
+	Menu menu;
+	class Menu {
+		List<string> choices;
+	}
+	semaphore atDestination;
+	boolean onBreak;
+	boolean hasRequestedBreak;
+	boolean comingBackFromBreak;
+
+Messages:
+	SitAtTable(CustomerAgent cust, Table t) {
+		myCustomers.add(new MyCustomer(cust, waiting, t));
+	}
+	ImReadyToOrder(CustomerAgent cust) {
+		if there exists myC in myCustomers such that myC.customer = cust
+			myC.s = readyToOrder;
+	}
+	HereIsMyChoice(String choice, CustomerAgent cust) {
+		if there exists myC in myCustomers such that myC.customer = cust
+			myC.choice = choice
+			myC.s = ordered;
+	}
+	OutOf(String choice, Table table){
+		menu.remove(choice);
+		if there exists myC in myCustomers such that myC.table = table
+			myC.s = reOrder;
+	}
+	OrderIsReady(String choice, Table t) {
+		if there exists myC in myCustomers such that myC.table = t && myC.choice = choice 	//MIGHT WANT TO  MODIFY
+			myC.s = foodReady;
+	}
+	HereIsCheck(Float check, CashierAgent csh, CustomerAgent c){
+		if there exists myC in myCustomers such that myC.customer = c
+			c.msgHereIsCheck();
+	}
+	DoneEatingAndLeaving(CustomerAgent cust) {
+		if there exists myC in myCustomers such that myC.customer = cust
+			myC.s = done;
+	}
+	AskForBreak(){
+		hasRequestedBreak = true;
+		host.msgWantToGoOnBreak();
+	}
+	BreakGranted(boolean answer){
+		if answer = true
+			onBreak = true;
+		else 
+			hasRequestedBreak = false;
+	}
+	ComeBackFromBreak(){
+		comingBackFromBreak = true;
+	}
+
+Scheduler:
+	if there exists myC in myCustomers such that myC.s = waiting and onBreak = false
+		BringCustomerToTable(myC);
+	if there exists myC in myCustomers such that myC.s = readyToOrder
+		TakeOrder(myC);
+	if there exists myC in myCustomers such that myC.s = ordered
+		GiveOrderToCook(myC);
+	if there exists myC in myCustomers such that myC.s = reOrder
+		RetakeOrder(myC);
+	if there exists myC in myCustomers such that myC.s = foodReady
+		DeliverFood(myC);
+	if there exists myC in myCustomers such that myC.s = done
+		LeaveCustomer(myC);
+	if comingBackFromBreak
+		TellHostYoureBack();
+
+Actions:
+	BringCustomerToTable(MyCustomer myC) {
+		myC.customer.FollowMeToTable(menu, myC.table.tableNumber, this);
+		DoGoToTable();
+		myC.table.setOccupant(myC.customer);
+		myC.s = seated;
+	}
+	TakeOrder(MyCustomer myC) {
+		DoTakeOrder();
+		myC.s = decidingOrder;
+		myC.customer.WhatWouldYouLike();
+	}
+	GiveOrderToCook(MyCustomer myC) {
+		DoGiveOrderToCook();
+		myC.s = waitingForFood;
+		cook.HereIsAnOrder(this, myC.choice, myC.table);
+	}
+	RetakeOrder(MyCustomer myC){
+		DoRetakeOrder();
+		myC.s = state.decidingOrder;
+		myC.customer.OutOfChoice(menu);
+	}
+	DeliverFood(MyCustomer myC) {
+		DoDeliverFood();
+		myC.s = state.served;
+		myC.customer.HereIsYourFood(myC.choice);
+		cashier.msgComputeBill(myC.customer, myC.choice);
+	}
+	LeaveCustomer(MyCustomer myC) {
+		DoLeaveCustomer();
+		host.TableIsFree(myC.table);
+		myCustomers.remove(myC);
+	}
+	TellHostYoureBack(){
+		host.msgOffBreak(this);
+		onBreak = false;
+		comingBackFromBreak = false;	
+	}
+
+
+CUSTOMER AGENT
+
+Data:
+	string name;
+	int hungerLevel = 5;
+	int currentTable;
+	Timer timer;
+	WaiterAgent waiter;
+	HostAgent host;
+	enum AgentState = DoingNothing, WaitingInRestaurant, BeingSeated, Seated, ReadyToOrder, Choosing, PlacingOrder, Eating, Leaving;
+	enum AgentEvent = none, gotHungry, restaurantFull, DecidedToStay, followHost, seated, choiceReady, waiterCalled, foodArrived, doneEating, doneLeaving;
+	Menu my Menu;
+	string myOrder;
+	Float cash;
+	Float bill;
+	CashierAgent cashier;
+
+Messages:
+	gotHungry() {
+		event = gotHungry;
+	}
+	FollowMeToTable(Menu menu, int tableNumber, WaiterAgent waiter) {
+		setWaiter(waiter);
+		currentTable = tableNumber;
+		event = followHost;
+	}
+	GotOrder(string order) 	[  //THIS WILL LATER BE USED SIMILARLY TO gotHungry() TO RECEIVE A USER INPUT. FOR NOW IT IS CALLED ARTIFICIALLY IN THE DecideOrder() METHOD BELOW
+		myOrder = order;
+		event = choiceReady;
+	}
+	WhatWouldYouLike() {
+		event = waiterCalled;
+	}
+	OutOfChoice(Menu menu){
+		myMenu = menu;
+		event = OutOfFood;
+	}
+	HereIsYourFood() {
+		event = foodArrived;
+	}
+	HereIsCheck(Float check, CashierAgent csh){
+		bill = check;
+		cashier = csh;
+	}
+	RestaurantFull(){
+		event = restaurantFull;
+	}
+
+Scheduler:
+	if state = DoingNothing and event = gotHungry
+		state = WaitingInRestaurant;
+		goToRestaurant();
+	if state = WaitingInRestaurant and event = followHost
+		state = BeingSeated;
+		SitDown();
+	if state = WaitingInRestaurant and event = restaurantFull
+		DecideToLeave();
+	if state = BeingSeated and event = seated
+		state = ReadyToOrder;
+		CallWaiter();
+	if state = ReadyToOrder and event = waiterCalled
+		state = Choosing;
+		DecideOrder();
+	if state = Choosing and event = choiceReady
+		state = PlacingOrder
+		PlaceOrder();
+	if state = PlacingOrder and event = OutOfFood
+		state = Choosing
+		DecideOrder();
+	if state = PlacingOrder and event = foodArrived
+		state = Eating;
+		EatFood();
+	if state = Eating and event = doneEating
+		state = Paying;
+		Pay();
+	if state = Paying and event = donePaying
+		state = Leaving;
+		LeaveTable();
+	if state = Leaving and event = doneLeaving
+		state = doingNothing;
+
+Actions:
+	goToRestaurant() { host.IWantToEat(this); }
+	SitDown() { DoGoToSeat(currentTable); }
+	CallWaiter() { waiter.ImReadyToOrder(this); }
+	DecideOrder() {
+		List<string> cannotAfford;
+		if there exists food in myMenu.foods such that cash < myMenu.Prices.get(food) and name does not equal "Flake"
+			cannotAfford.add(food);
+		if there exists food in cannotAfford
+			myMenu.remove(food);
+		if myMenu.foods.isEmpty
+			waiter.msgDoneEatingAndLeaving();
+			return;
+		else if myMenu.find(name)
+			myOrder = name;
+		else 
+			myOrder = myMenu.randomSelect();
+		msgGotOrder(myOrder); //TEMPORARY HACK UNTIL USER INPUT IS IMPLEMENTED
+	}
+	PlaceOrder() {
+		DoDisplayChoice(myOrder);
+		waiter.HereIsMyChoice(myOrder, this);
+	}
+	EatFood() {
+		DoEatFood(myOrder);
+		timer.schedule( run(){event = doneEating;}, 5000);
+	}
+	Pay(){
+		cash -= bill;
+		if cash > 0
+			cashier.msgPayment(bill);
+		else
+			cashier.msgFlaking(bill);
+		event = donePaying;
+	}
+	LeaveTable() {
+		waiter.DoneEatingAndLeaving(this);
+		DoExitRestaurant();
+	}
+	DecideToLeave(){
+		int leave = rand()*2
+			if(leave == 1)
+				host.msgLeaving(this);
+				DoExitRestaurant();
+				state = DoingNothing;
+				event = none;
+			else
+				state = WaitingInRestaurant;
+				event = DecidedToStay;
+	}
+
+
+HOST AGENT
+
+Data:
+	string name;
+	List<CustomerAgent> waitingCustomers;
+	Collection<Table> tables;
+	List<myWaiter> waiters;
+	class myWaiter {
+		WaiterAgent w;
+		state s;
+		string name;
+	}
+	int WAITERCOUNT = 0;
+	enum state = available, onBreak;
+
+Messages:
+	IWantToEat(CustomerAgent cust) {
+		waitingCustomers.add(cust);
+	}
+	WantToGoOnBreak(WaiterAgent waiter){
+		if there exists MyWaiter w in waiters such that w.w = waiter
+			w.s = wantsBreak;
+	}
+	TableIsFree(Table table){ 
+		if there exists t in tables such that t = table
+			table.setUnoccupied;
+	}
+	OffBreak(WaiterAgent waiter){
+		if there exists MyWaiter w in waiters such that w.w = waiter
+			w.s = available;
+	}
+	Leaving(CustomerAgent customer){
+		if there exists CustomerAgent c in waitingCustomers such that c = customer
+			waitingCustomers.remove(c);
+	}
+
+Scheduler:
+	if there exists table in tables such that !t.isOccupied && waiters.size > 0
+		
+		if waiters.get(WAITERCOUNT).isAvailable()     				//Always true for V2.0 so no else condition necessary
+			 
+			if waitingCustomers is not empty
+				
+				AddressCustomer(waitingCustomers.get(0), waiters.get(WAITERCOUNT), table);
+				
+				if WAITERCOUNT = waiters.size()-1			//MAKES SURE IT DOESN'T GO BEYOND INDEX, LOOPS BACK
+					WAITERCOUNT = 0;
+				else
+					WAITERCOUNT++;					//INCREMENTS SO THAT NEXT WAITER WILL GET NEXT ASSIGNMENT
+	
+	boolean full = true;
+	if there exists Table table in tables such that table is not occupied and waitingCustomers is not empty and waiters is not empty
+		full = false;
+	if full = true
+		if waitingCustomers is not empty and waiters is not empty
+			waitingCustomers.get(0).msgRestaurantFull();
+
+	if there exists myWaiter w in waiters such that w.s = wantsBreak
+		if waiters.size <= 1
+			w.w.msgBreakGranted(false);
+			w.s = available;
+		if waiters.size > 1	
+			w.w.msgBreakGranted(true);
+			w.s = onBreak;
+Actions:
+	AddressCustomer(CustomerAgent c, myWaiter w, Table t) {
+		t.occupiedBy = c;
+		waitingCustomers.remove(c);
+		w.w.SitAtTable(c, t);
+	}
+
+
+
+COOK AGENT
+
+Data:
+	List<Order> orders;
+	List<MyMarket> Markets;
+	class MyMarket{
+		MarketAgent m;
+		boolean Steak = true;
+		boolean Chicken = true;
+		boolean Pizza = true;
+		boolean Salad = true;
+	}
+	class Order {
+		state s;
+		waiter w;
+		string choice;
+		int table;
+	}
+	enum state = pending, cooking, done, finished;
+	Timer timer;
+	Map<String, Food> Foods;
+	class Food{
+		int cookingTime;
+		int inventory;
+		String type;
+	}
+	int low = 2;
+	int marketCount = 0;
+
+Messages:
+	HereIsAnOrder(WaiterAgent w, String choice, Table table) {
+		orders.add(new Order(pending, w, voice, table.tableNumber);
+	}
+	FoodDone(Order o) {
+		o.s = done;
+	}
+	OrderCannotBeFulfilled(String food, MarketAgent m){
+		if there exists MyMarket myM in Markets sic that myM.m = m
+			myM.setUnstocked(food);
+	}
+	ShipmentReady(String f){
+		if there exists String food in f such that Foods.containsKey(food)
+			Foods.get(f).inventory += 5;
+	}
+	MarketDry(MarketAgent m){
+		Markets.remove(m);
+	}
+
+Scheduler:
+	if there exists food in Foods such that food.inventory <= low
+		List<String> neededFoods;
+		neededFoods.add(food.type);
+		if there exists MyMarket m in Markets and there exists String food in neededFoods such that m.isStocked(food)
+			m.m.msgNeedFood(food);
+
+	if there exists o in orders such that o.s = pending
+		CookIt(o);
+	if there exists o in orders such that o.s = done
+		PlateIt(o);
+
+Actions:
+	TryToCookIt(Order o) {
+		Food temp;
+		temp = Foods.get(o.choice);
+		if temp.inventory = 0
+			o.w.msgOutOfChoice(o.choice, o.table);
+			orders.remove(o);
+		else		
+			o.s = cooking;
+			timer.schedule( run(){ FoodDone(o), CookingTimes.get(o.choice));
+			temp.inventory--;
+	}
+	PlateIt(Order o) {
+		o.s = finished;
+		o.w.OrderIsReady(o.choice, o.table);
+		orders.remove(o);
+	}
+
+CASHIER AGENT
+
+Data:
+	List <MyBill> Bills;
+	String name;
+	class myBill{
+		state s;
+		WaiterAgent w;
+		CustomerAgent c;
+		Float tab;
+	}
+	enum state = pending, computing, charging, finished;
+	Map <String, Float> Prices;
+
+Messages:
+	ComputeBill(WaiterAgent w, CustomerAgent c, String choice){
+		if there exists MyBill b in Bills such that b.c = c
+			b.w = w;
+			b.choice = choice;
+		else Bills.add(MyBill(w, choice, c);
+	}
+	Payment(CustomerAgent c, Float cash){
+		if there exists b in Bills such that b.c = c
+			b.tab -= cash;
+			b.s = charging
+	}
+	Flaking(CustomerAgent c, Float cash){
+		DoCustomerFlaked();
+	}		
+
+Scheduler:
+	if there exists MyBill b in Bills such that b.s = pending
+		ComputeIt(b);
+	if there exists MyBill b in Bills such that b.s = charging
+		ChargeIt(b);
+Actions:
+	ComputeIt(MyBill b){
+		b.s = computing;	
+		Float check = Prices.get(b.choice);
+		b.tab += check;
+		b.w.msgHereIsCheck(check, b.c);
+	}
+	ChargeIt(MyBill b){
+		if b.tab = 0
+			Bills.remove(b);
+	}
+
+MARKET AGENT
+
+Data:
+	String name;
+	CookAgent cook;
+	List <MarketOrder> MarketOrders;
+	class MarketOrder{
+		state s;
+		List<String> foods;
+	}
+	state = pending, packaging, done, finished
+	List <MyFood> Stock
+	class myFood{
+		string type;
+		int inventory;
+	}
+	Timer timer;
+Messages:
+	PrepareFood(){
+		Stock.add(MyFood("Steak", 5));
+		Stock.add(MyFood("Chicken", 5));
+		Stock.add(MyFood("Salad", 5));
+		Stock.add(MyFood("Pizza", 0));		//Explained in README
+	}
+	NeedFood(String food, CookAgent c){
+		cook = c;
+		MarketOrders.add(MarketOrder(food));
+	}
+	ShipmentReady(MarketOrder mo){
+		mo.s = done;
+	}
+
+Scheduler:
+	boolean empty = true;
+	if there exists MyFood mf in Stock such that mf.inventory > 0
+		empty = false;
+	if empty and Stock is not empty
+		cook.msgMarketDry();
+	if there exists MarketOrder mo in MarketOrders such that mo.s = pending
+		TryToPrepareShipment(mo);
+	is there exists MarketOrder mo in MarketOrders such that mo.s = done
+		ShipIt(mo);
+Actions:
+	TryToPrepareShipment(MarketOrder mo){
+		if there exists MyFood mf in Stock such that mf.type = mo.food and mf.inventory = 0
+			cook.msgOrderCannotBeFulfilled(mo.food);
+			MarketOrder.remove(mo);
+			return;	
+		mo.s = packaging;
+		timer.schedule(run { msgShipmentReady(mo); }, 10000);
+	}
+	ShipIt(MarketOrder mo){
+		mo.s = finsihed;
+		if there exists mf in Stock such that mf.type = mo.food
+			mf.inventory -= 5;
+		cook.msgSendShipment(mo.food);
+		MarketOrders.remove(mo);
+	}
+	
